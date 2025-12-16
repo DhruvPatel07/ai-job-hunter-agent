@@ -38,5 +38,8 @@ The workflow utilizes a Multi-Branch Pipeline architecture:
 - workflow.json: The complete source code for the automation agent.
 - requirements.txt: List of required API services.
 
+## 📸 Workflow Diagram
+![n8n Workflow Diagram](workflow-diagram.png)
+
 ---
 Built by Dhruv Patel | Sudbury, ON
