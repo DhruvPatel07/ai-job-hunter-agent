@@ -1,0 +1,765 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "8bb00181-b920-4712-ba52-68f88ddf9880",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -192,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "YOUR_DRIVE_FILE_ID",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "edb7f985-74c3-463c-97d7-1e881df4f889",
+      "name": "Download Resume",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        32,
+        -80
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "QRHIMaxve2R6DTHv",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "id": "68a7dac5-d6d7-4025-ae46-895d9d7da6e0",
+      "name": "Extract Resume Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        256,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Filter",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "fd92e66c-2738-4e4c-96b8-b957f81ed828",
+      "name": "Get Search Filters",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        256,
+        128
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "Uk9ytlZuVdfWclQp",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const filters = $input.first().json;\n\n// 1. GET KEYWORD FROM GOOGLE SHEET\nconst keyword = filters.Keyword || \"\";\n\n// 2. BUILD BASE URL\n// f_TPR=r3600 -> Past 1 Hour (Sniper mode)\n// sortBy=DD   -> Newest first\nlet url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(keyword)}&f_TPR=r28800&sortBy=DD`;\n\n// 3. APPLY OTHER FILTERS\nconst location = filters.Location || \"Toronto, Ontario, Canada\"; \nconst experienceLevel = filters['Experience Level'] || \"\";\nconst remote = filters.Remote || \"\";\nconst jobType = filters['Job Type'] || \"\";\nconst easyApply = filters['Easy Apply'] || \"\";\n\nif (location) url += `&location=${encodeURIComponent(location)}`;\n\n// Experience Level\nif (experienceLevel) {\n  const experienceMap = { \"Internship\": \"1\", \"Entry level\": \"2\", \"Associate\": \"3\", \"Mid-Senior level\": \"4\", \"Director\": \"5\", \"Executive\": \"6\" };\n  const levels = experienceLevel.split(\",\").map(e => experienceMap[e.trim()]).filter(Boolean).join(\",\");\n  if (levels) url += `&f_E=${levels}`;\n} else {\n    // FORCE \"Entry Level\" (2) AND \"Associate\" (3) if not specified in sheet\n    url += `&f_E=2,3`;\n}\n\n// Remote Type\nif (remote) {\n  const remoteMap = { \"On-Site\": \"1\", \"Remote\": \"2\", \"Hybrid\": \"3\" };\n  const remoteTypes = remote.split(\",\").map(r => remoteMap[r.trim()]).filter(Boolean).join(\",\");\n  if (remoteTypes) url += `&f_WT=${remoteTypes}`;\n}\n\n// Job Type\nif (jobType) {\n  const typeMap = { \"Full-time\": \"F\", \"Part-time\": \"P\", \"Contract\": \"C\", \"Temporary\": \"T\", \"Other\": \"O\", \"Internship\": \"I\" };\n  const types = jobType.split(\",\").map(t => typeMap[t.trim()]).filter(Boolean).join(\",\");\n  if (types) url += `&f_JT=${types}`;\n}\n\n// Easy Apply\nif (easyApply === true || easyApply === \"TRUE\") url += \"&f_EA=true\";\n\nreturn { url };"
+      },
+      "id": "a1385db9-ed83-47c4-9844-ad8e87261c19",
+      "name": "Build Search URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "id": "f69cffba-479d-489d-96c3-c39d7ed1a7df",
+      "name": "Fetch LinkedIn Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        688,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data;\n// Updated Regex to match 'www', 'ca', 'uk', etc.\nconst linkRegex = /href=\"(https:\\/\\/[a-z]{2,3}\\.linkedin\\.com\\/jobs\\/view\\/[^\"]+)\"/g;\nconst links = [];\nlet match;\n\nwhile ((match = linkRegex.exec(html)) !== null) {\n  // Clean the URL (remove tracking parameters)\n  let cleanLink = match[1].split('?')[0];\n  \n  if (!links.includes(cleanLink)) {\n    links.push(cleanLink);\n  }\n}\n\nreturn links.map(link => ({ json: { links: link } }));"
+      },
+      "id": "09c2c7f5-5d0d-4ac4-a3cb-c7d4a38cbed5",
+      "name": "Extract Job Links",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "0f0c12d7-952d-4769-a355-6d346c9e03c8",
+      "name": "Loop Over Jobs",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1152,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "id": "b83cdaad-b754-41d4-b578-4fe4ec05f5b9",
+      "name": "Wait Between Requests",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        -80
+      ],
+      "webhookId": "c9cb4878-ae4d-4b8e-bd37-5395011f7761"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.links }}",
+        "options": {}
+      },
+      "id": "39959af1-29f2-47ac-a28d-949939928ea9",
+      "name": "Fetch Job Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1792,
+        128
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data || \"\";\nconst url = $input.first().json.url || \"\";\n\n// Helper function to clean text\nconst clean = (str) => {\n  if (!str) return \"Not found\";\n  return str.replace(/<[^>]*>/g, \"\") // Remove HTML tags\n            .replace(/\\s+/g, \" \")     // Collapse whitespace\n            .replace(/&amp;/g, \"&\")\n            .trim();\n};\n\n// Robust Regex extraction\nconst titleMatch = html.match(/<h1[^>]*>([^<]+)<\\/h1>/i);\nconst companyMatch = html.match(/<a[^>]*class=\"[^\"]*topcard__org-name-link[^\"]*\"[^>]*>([^<]+)<\\/a>/i) || html.match(/<div[^>]*class=\"[^\"]*top-card-layout__card[^\"]*\"[^>]*>[\\s\\S]*?<a[^>]*>([^<]+)<\\/a>/i);\nconst locationMatch = html.match(/<span[^>]*class=\"[^\"]*topcard__flavor[^\"]*\"[^>]*>([^<]+)<\\/span>/i) || html.match(/<span[^>]*class=\"[^\"]*top-card-layout__first-subline[^\"]*\"[^>]*>([\\s\\S]*?)<\\/span>/i);\n\n// Extract Description - Look for the main description container\nlet description = \"Description not found\";\nconst descMatch = html.match(/<div[^>]*class=\"[^\"]*show-more-less-html__markup[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i) || html.match(/<div[^>]*class=\"[^\"]*description__text[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i);\n\nif (descMatch) {\n  description = clean(descMatch[1]);\n}\n\nreturn {\n  title: clean(titleMatch ? titleMatch[1] : \"Job Title Not Found\"),\n  company: clean(companyMatch ? companyMatch[1] : \"Company Not Found\"),\n  location: clean(locationMatch ? locationMatch[1] : \"Location Not Found\"),\n  description: description.substring(0, 8000), // Limit char count for AI context window\n  applyLink: url\n};"
+      },
+      "id": "e7b947c5-ba4c-4ac2-b494-36ba10d18ce6",
+      "name": "Parse Job Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "id": "53aedff6-af17-4a56-86f7-5cd850f8bb5c",
+      "name": "OpenAI Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        416
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "lQ1bsBAP5Zs2ev4D",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n// Handle complex nested AI output or simple output\nconst aiText = item.output || \n               (item.response && item.response.generations && item.response.generations[0] && item.response.generations[0][0] && item.response.generations[0][0].text) || \n               \"{}\";\n\n// Clean up markdown code blocks if present\nconst cleaned = aiText.replace(/```json|```/g, \"\").trim();\n\ntry {\n  const parsed = JSON.parse(cleaned);\n  return {\n    score: parseInt(parsed.score) || 0,\n    coverLetter: parsed.coverLetter || \"No cover letter generated\",\n    tailoredResume: parsed.tailoredResume || \"No resume generated\"\n  };\n} catch (e) {\n  return {\n    score: 0,\n    coverLetter: \"Error parsing AI response\",\n    tailoredResume: \"\"\n  };\n}"
+      },
+      "id": "fd74ca3b-2844-40f3-bfdb-789c938c3cce",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.score }}",
+              "rightValue": 50,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              },
+              "id": "4e033423-f967-44f1-9dd8-a263761bd4d2"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c851992b-20e1-4bcb-b031-c130807197c6",
+      "name": "Filter by Score",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2672,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "LinkedIn Job Search",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1349811135,
+          "mode": "list",
+          "cachedResultName": "Sheet2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit#gid=1349811135"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "link": "={{ $('Loop Over Jobs').item.json.links }}",
+            "Title": "={{ $('Parse Job Details').item.json.title }}",
+            "Company": "={{ $('Parse Job Details').item.json.company }}",
+            "Location": "={{ $('Parse Job Details').item.json.location }}",
+            "score": "={{ $json.score }}",
+            "Cover Letter": "={{ $json.coverLetter }}",
+            "description": "={{ $('Parse Job Details').item.json.description }}",
+            "Tailored Resume": "={{ $json.tailoredResume }}"
+          },
+          "matchingColumns": [
+            "link"
+          ],
+          "schema": [
+            {
+              "id": "Title",
+              "displayName": "Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Location",
+              "displayName": "Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "link",
+              "displayName": "link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "score",
+              "displayName": "score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Cover Letter",
+              "displayName": "Cover Letter",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tailored Resume",
+              "displayName": "Tailored Resume",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "1f546c40-8190-48f9-9708-98271f9e887a",
+      "name": "Save to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        2896,
+        32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "Uk9ytlZuVdfWclQp",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "=🎯 New Job Match Found!\n\n📋 Title: {{ $('Parse Job Details').item.json.title }}\n🏢 Company: {{ $('Parse Job Details').item.json.company }}\n📍 Location: {{ $('Parse Job Details').item.json.location }}\n⭐ Match Score: {{ $json.score }}\n🔗 Apply: {{ $('Loop Over Jobs').item.json.links }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "f5e21e1c-41d0-4a80-bb27-46fa9b6a87bd",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2896,
+        224
+      ],
+      "webhookId": "65ee2b9b-198b-420d-a6e9-c6493ddf7c69",
+      "credentials": {
+        "telegramApi": {
+          "id": "8d5xNUtKLcI9BslJ",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        432,
+        544
+      ],
+      "id": "ab09c6bc-620b-40b8-96dc-0ab957906a06",
+      "name": "Loop Keywords"
+    },
+    {
+      "parameters": {
+        "url": "https://jsearch.p.rapidapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.Keyword }} in {{ $json.Location }}"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            },
+            {
+              "name": "num_pages",
+              "value": "1"
+            },
+            {
+              "name": "date_posted",
+              "value": "3days"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-rapidapi-host",
+              "value": "jsearch.p.rapidapi.com"
+            },
+            {
+              "name": "x-rapidapi-key",
+              "value": "YOUR_RAPIDAPI_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        736,
+        560
+      ],
+      "id": "3b4a8e98-6d37-4b60-b0fe-0e50b100b2f8",
+      "name": "Search Indeed"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        944,
+        560
+      ],
+      "id": "e941efc0-da1d-41e5-a3b8-382e7bdc2695",
+      "name": "Wait",
+      "webhookId": "97c66a64-d007-42c9-9491-558494ba2eb1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get input items or empty array\nconst items = $input.all();\n\n// Safety check: If no items, return empty array to keep loop alive\nif (items.length === 0 || !items[0].json) {\n  return [{ json: { error: \"No jobs found\" } }]; \n}\n\n// Check if 'data' exists inside the response\nconst responseData = items[0].json.data || [];\n\n// If 'data' is not an array (sometimes API returns error objects), return empty\nif (!Array.isArray(responseData)) {\n    return [{ json: { error: \"No jobs found\" } }];\n}\n\nreturn responseData.map(job => ({\n  json: {\n    title: job.job_title,\n    company: job.employer_name,\n    location: job.job_city ? `${job.job_city}, ${job.job_country}` : \"Canada\",\n    link: job.job_apply_link,\n    description: job.job_description || \"See link for details\",\n    source: \"Indeed/Glassdoor\"\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        688
+      ],
+      "id": "b8a1c522-ba0e-4c5c-b56c-85d38fb537d6",
+      "name": "Normalize Indeed Data"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert ATS Resume Optimizer.\nYour goal is to maximize the match rate between a candidate and a job description.\n\nAnalyze the Job Description and Candidate Resume below.\n\nPerform 3 tasks:\n1. **Match Score:** Calculate a score (0-100) based on skills match.\n2. **Cover Letter:** Write a tailored cover letter (2 paragraphs).\n3. **Tailored Resume:** Rewrite the candidate's resume content to be 100% ATS-friendly.\n   - Do NOT add skills the candidate does not have.\n   - Rephrase existing points to use keywords from the job description.\n\nInput Data:\nJob Description:\n{{ $json.description }}\n\nCandidate Resume:\n{{ $('Extract Resume Text').first().json.text }}\n\nOUTPUT FORMAT:\nRespond ONLY with valid JSON. Do not include markdown code blocks (like ```json). Just the raw JSON string.\nStructure:\n{\n  \"score\": 85,\n  \"coverLetter\": \"Cover letter text...\",\n  \"tailoredResume\": \"Full resume text...\"\n}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        2208,
+        224
+      ],
+      "id": "390a6aa8-0c46-42ae-9d79-d11e7fc1172c",
+      "name": "AI Job Matcher"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download Resume",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Resume": {
+      "main": [
+        [
+          {
+            "node": "Extract Resume Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Resume Text": {
+      "main": [
+        [
+          {
+            "node": "Get Search Filters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Search Filters": {
+      "main": [
+        [
+          {
+            "node": "Build Search URL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Loop Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch LinkedIn Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch LinkedIn Results": {
+      "main": [
+        [
+          {
+            "node": "Extract Job Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Job Links": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Jobs": {
+      "main": [
+        [
+          {
+            "node": "Wait Between Requests",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Job Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Between Requests": {
+      "main": [
+        [
+          {
+            "node": "Fetch Job Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Job Page": {
+      "main": [
+        [
+          {
+            "node": "Parse Job Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Job Details": {
+      "main": [
+        [
+          {
+            "node": "AI Job Matcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Job Matcher",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Filter by Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter by Score": {
+      "main": [
+        [
+          {
+            "node": "Save to Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Alert": {
+      "main": [
+        []
+      ]
+    },
+    "Loop Keywords": {
+      "main": [
+        [
+          {
+            "node": "AI Job Matcher",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Indeed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Indeed": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Normalize Indeed Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Indeed Data": {
+      "main": [
+        [
+          {
+            "node": "Loop Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Job Matcher": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d1c62570cb8a53abae5d7d2484e4f9fe0db256a984468c04c6d3fc42dab54de4"
+  }
+}
